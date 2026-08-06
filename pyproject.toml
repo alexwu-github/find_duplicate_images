@@ -1,6 +1,6 @@
 [project]
 name = "find-duplicate-images"
-version = "0.1.0"
+version = "1.0.0"
 description = ""
 authors = [
     {name = "Alex",email = "itsalexwu@gmail.com"}
@@ -19,5 +19,5 @@ build-backend = "poetry.core.masonry.api"
 
 [dependency-groups]
 dev = [
-    "pyinstaller (>=6.21.0,<7.0.0)"
+    "pyinstaller (>=6.21.0,<7.0.0)",
 ]
