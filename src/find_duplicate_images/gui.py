@@ -1,5 +1,7 @@
 import csv
 import logging
+import platform
+import subprocess
 import threading
 import time
 import tkinter as tk
@@ -71,6 +73,33 @@ def _pick_font(root):
 def _files(count):
     """Pluralize a file count for group labels."""
     return f"{count} file" if count == 1 else f"{count} files"
+
+
+def _reveal_in_file_manager(filepath):
+    """
+    Open filepath's containing folder in the OS file manager.
+
+    Windows Explorer and macOS Finder can highlight the specific file; Linux
+    has no equivalent command that works across file managers, so xdg-open
+    just opens the folder itself.
+    """
+    path = Path(filepath)
+    folder = path.parent
+    system = platform.system()
+    if system == "Windows":
+        # explorer.exe's exit code is unreliable even on success, so this
+        # never uses check=True.
+        args = (
+            ["explorer", "/select,", str(path)]
+            if path.exists()
+            else ["explorer", str(folder)]
+        )
+        subprocess.run(args, check=False)
+    elif system == "Darwin":
+        args = ["open", "-R", str(path)] if path.exists() else ["open", str(folder)]
+        subprocess.run(args, check=False)
+    else:
+        subprocess.run(["xdg-open", str(folder)], check=False)
 
 
 def _bind_mousewheel(widget, canvas):
@@ -571,6 +600,61 @@ class DuplicateImageFinderGUI:
 
         self.tree.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         tree_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+
+        # Right-click a file row to reveal it in the OS file manager. tk.Menu
+        # is a plain (non-ttk) widget, so its colors are set directly here to
+        # match the rest of the theme.
+        self.tree_menu = tk.Menu(
+            self.tree,
+            tearoff=0,
+            bg=SURFACE,
+            fg=TEXT,
+            activebackground=ACCENT_SOFT,
+            activeforeground=ACCENT,
+            relief="flat",
+            borderwidth=1,
+            font=self.font,
+        )
+        self.tree_menu.add_command(label="📂  Open Containing Folder")
+
+        self.tree.bind("<Button-3>", self._show_tree_context_menu)
+        if platform.system() == "Darwin":
+            # macOS reports the secondary click as Button-2.
+            self.tree.bind("<Button-2>", self._show_tree_context_menu)
+
+    def _show_tree_context_menu(self, event):
+        """Right-click handler: select the row under the cursor and, if it's
+        a file (not a group header), offer to open its containing folder."""
+        row = self.tree.identify_row(event.y)
+        if not row:
+            return
+
+        values = self.tree.item(row, "values")
+        if not values:
+            return  # group header — no single folder to open
+
+        self.tree.selection_set(row)
+        name, folder, _size = values
+        filepath = str(Path(folder) / name)
+        self.tree_menu.entryconfigure(
+            0, command=lambda: self._open_containing_folder(filepath)
+        )
+        self.tree_menu.tk_popup(event.x_root, event.y_root)
+
+    def _open_containing_folder(self, filepath):
+        """Reveal filepath in the OS file manager, from the context menu."""
+        if not Path(filepath).parent.exists():
+            messagebox.showwarning(
+                "Folder Not Found",
+                f"This folder no longer exists:\n{Path(filepath).parent}",
+            )
+            return
+        try:
+            _reveal_in_file_manager(filepath)
+        except OSError as e:
+            messagebox.showerror(
+                "Could Not Open Folder", f"Could not open the folder.\n\n{e}"
+            )
 
     def _set_status(self, text, kind="default"):
         """Update the status line with a color that reflects scan state."""
