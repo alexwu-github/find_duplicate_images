@@ -11,7 +11,7 @@ modifies anything; it only lists what it finds.
   contents, so two images only get flagged as duplicates if their bytes actually match.
 - **Live results** — duplicate groups appear in the list the moment they're confirmed, while the
   scan is still running, instead of waiting for the whole scan to finish.
-- **80+ supported formats** — standard formats (JPG, PNG, GIF, TIFF, WebP, …) plus RAW formats
+- **48 supported formats** — standard formats (JPG, PNG, GIF, TIFF, WebP, …) plus RAW formats
   from Canon, Nikon, Sony, Fuji, Olympus, Panasonic, Pentax, Leica, Hasselblad, Sigma, Phase One,
   Samsung, Kodak, Minolta, Epson, Mamiya, and more, with per-format checkboxes and quick-select
   buttons (Standard / RAW only / all / none).
