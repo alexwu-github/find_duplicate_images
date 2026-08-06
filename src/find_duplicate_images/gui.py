@@ -49,6 +49,8 @@ _STATUS_COLORS = {
     "error": DANGER,
 }
 
+_PHASE_LABELS = {"sizing": "Reading files", "hashing": "Comparing contents"}
+
 
 def _pick_font(root):
     """Prefer a clean humanist sans, falling back to whatever the platform has."""
@@ -115,6 +117,9 @@ class DuplicateImageFinderGUI:
         self.scan_thread = None
         self.selected_paths = []
         self.format_vars = {}
+        # Maps a scanner group key -> its tree row, so live updates during a
+        # scan know whether to grow an existing group or start a new one.
+        self._group_rows = {}
 
         self._setup_style()
         self.setup_ui()
@@ -555,7 +560,7 @@ class DuplicateImageFinderGUI:
         self.tree.column("Folder", width=420)
         self.tree.column("Size (MB)", width=90, anchor=tk.E)
 
-        # Subtle zebra striping between groups, applied in populate_results().
+        # Subtle zebra striping between groups, applied in add_or_grow_group().
         self.tree.tag_configure("group-odd", background=SURFACE)
         self.tree.tag_configure("group-even", background=ROW_ALT)
 
@@ -674,6 +679,7 @@ class DuplicateImageFinderGUI:
         # Clear previous results
         for item in self.tree.get_children():
             self.tree.delete(item)
+        self._group_rows = {}
 
         # Update UI
         self.scan_btn.config(state=tk.DISABLED)
@@ -690,17 +696,27 @@ class DuplicateImageFinderGUI:
         """Worker function that runs the scan in a background thread."""
         last_update = 0.0
 
-        def progress_callback(current, total, filepath):
+        def progress_callback(phase, current, total, filepath):
             # Throttle to ~20 updates/sec. Queueing one callback per file would
             # flood the Tk event loop and lock the UI on a large drive.
             nonlocal last_update
             now = time.monotonic()
             if current == total or now - last_update >= 0.05:
                 last_update = now
-                self.root.after(0, self.update_progress, current, total, filepath)
+                self.root.after(
+                    0, self.update_progress, phase, current, total, filepath
+                )
+
+        def duplicate_callback(key, files):
+            # Runs on the scan thread; hop to the main thread before touching
+            # the tree so a group appears the moment it's confirmed, not after
+            # the whole scan finishes.
+            self.root.after(0, self.add_or_grow_group, key, files)
 
         try:
-            duplicates = self.scanner.scan_drive(self.selected_paths, progress_callback)
+            duplicates = self.scanner.scan_drive(
+                self.selected_paths, progress_callback, duplicate_callback
+            )
             self.root.after(0, self.scan_complete, duplicates)
         except Exception as e:
             # Nothing propagates out of a worker thread, so log here or the
@@ -708,15 +724,48 @@ class DuplicateImageFinderGUI:
             logger.exception("Scan failed")
             self.root.after(0, self.scan_error, str(e))
 
-    def update_progress(self, current, total, filepath):
+    def update_progress(self, phase, current, total, filepath):
         """Update the progress bar and status text."""
         if total > 0:
             progress = (current / total) * 100
             self.progress_var.set(progress)
-            self._set_status(f"Scanning... {current}/{total} files", "scanning")
+            label = _PHASE_LABELS.get(phase, phase)
+            self._set_status(f"{label}... {current}/{total}", "scanning")
             # Truncate long paths
             display_path = filepath if len(filepath) <= 80 else "..." + filepath[-77:]
             self.file_label.config(text=display_path)
+
+    def add_or_grow_group(self, key, files):
+        """
+        Insert a new duplicate-group row, or add a member to an existing one.
+
+        Called live during the hashing phase — `files` is the group's full
+        member list so far. Only members not already shown get a new row.
+        """
+        if key not in self._group_rows:
+            group_idx = len(self._group_rows) + 1
+            tag = "group-even" if group_idx % 2 == 0 else "group-odd"
+            parent = self.tree.insert(
+                "", "end", text=f"Group {group_idx} (0 files)", open=True, tags=(tag,)
+            )
+            self._group_rows[key] = parent
+        else:
+            parent = self._group_rows[key]
+            tag = self.tree.item(parent, "tags")[0]
+
+        already_shown = len(self.tree.get_children(parent))
+        for filepath in files[already_shown:]:
+            path = Path(filepath)
+            try:
+                size = f"{path.stat().st_size / (1024 * 1024):.2f}"
+            except OSError:
+                size = "N/A"
+            self.tree.insert(
+                parent, "end", values=(path.name, str(path.parent), size), tags=(tag,)
+            )
+
+        label = self.tree.item(parent, "text").split(" (")[0]
+        self.tree.item(parent, text=f"{label} ({_files(len(files))})")
 
     def scan_complete(self, duplicates):
         """Handle scan completion."""
@@ -724,9 +773,9 @@ class DuplicateImageFinderGUI:
         self.stop_btn.config(state=tk.DISABLED)
         self.file_label.config(text="")
 
-        # Partial results are still results, so a cancelled scan lists whatever
-        # it confirmed before stopping.
-        self.populate_results(duplicates)
+        # Every group was already added to the tree live, via
+        # add_or_grow_group, as the scan confirmed it — including whatever was
+        # found before a cancel. Nothing left to populate here.
         count = len(duplicates)
 
         if self.scanner.cancel_scan:
@@ -748,30 +797,6 @@ class DuplicateImageFinderGUI:
             messagebox.showinfo("Scan Complete", f"Found {count} duplicate groups!")
         else:
             messagebox.showinfo("Scan Complete", "No duplicates found!")
-
-    def populate_results(self, duplicates):
-        """List each duplicate group in the results tree."""
-        for group_idx, file_group in enumerate(duplicates, 1):
-            tag = "group-even" if group_idx % 2 == 0 else "group-odd"
-            parent = self.tree.insert(
-                "",
-                "end",
-                text=f"Group {group_idx} ({_files(len(file_group))})",
-                open=True,
-                tags=(tag,),
-            )
-            for filepath in file_group:
-                path = Path(filepath)
-                try:
-                    size = f"{path.stat().st_size / (1024 * 1024):.2f}"
-                except OSError:
-                    size = "N/A"
-                self.tree.insert(
-                    parent,
-                    "end",
-                    values=(path.name, str(path.parent), size),
-                    tags=(tag,),
-                )
 
     def scan_error(self, error_message):
         """Handle scan errors."""

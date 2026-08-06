@@ -19,9 +19,20 @@ class DuplicateScanner:
         self.scanned = 0
         self.cancel_scan = False
 
-    def scan_drive(self, root_paths, progress_callback=None):
+    def scan_drive(self, root_paths, progress_callback=None, duplicate_callback=None):
         """
         Find groups of byte-identical files under root_paths.
+
+        progress_callback(phase, current, total, filepath) fires during both
+        the file-discovery/sizing pass ("sizing") and the slower hashing pass
+        ("hashing"), so callers can show progress through the whole scan
+        rather than have it go blank during the slow part.
+
+        duplicate_callback(key, files), if given, fires every time a duplicate
+        group is confirmed or gains another member — `files` is the group's
+        full member list so far. `key` identifies the group stably across
+        calls, so callers can list results live instead of waiting for the
+        whole scan to finish.
 
         Cancelling stops each phase early but never throws work away: whatever
         duplicate groups were already confirmed are still returned.
@@ -33,7 +44,9 @@ class DuplicateScanner:
         self.total_files = len(image_files)
 
         size_groups = self._group_by_size(image_files, progress_callback)
-        hash_groups = self._group_by_hash(size_groups)
+        hash_groups = self._group_by_hash(
+            size_groups, progress_callback, duplicate_callback
+        )
 
         self.duplicates = [files for files in hash_groups.values() if len(files) > 1]
         return self.duplicates
@@ -62,7 +75,7 @@ class DuplicateScanner:
             try:
                 self.scanned = idx + 1
                 if progress_callback:
-                    progress_callback(idx + 1, self.total_files, filepath)
+                    progress_callback("sizing", idx + 1, self.total_files, filepath)
 
                 size = os.path.getsize(filepath)
                 if size > 0:
@@ -71,22 +84,37 @@ class DuplicateScanner:
                 continue
         return size_groups
 
-    def _group_by_hash(self, size_groups):
+    def _group_by_hash(
+        self, size_groups, progress_callback=None, duplicate_callback=None
+    ):
         """Hash the contents of same-size files to confirm real duplicates."""
+        # Only groups with 2+ same-size files are worth hashing at all — a
+        # unique size can never turn out to be a duplicate.
+        candidates = {
+            size: files for size, files in size_groups.items() if len(files) >= 2
+        }
+        total_to_hash = sum(len(files) for files in candidates.values())
+
         hash_groups = defaultdict(list)
-        for size, files in size_groups.items():
-            if len(files) < 2:
-                continue  # no duplicates possible for this size
+        hashed = 0
+        for size, files in candidates.items():
             for filepath in files:
                 if self.cancel_scan:
                     return hash_groups
+                hashed += 1
+                if progress_callback:
+                    progress_callback("hashing", hashed, total_to_hash, filepath)
                 try:
                     file_hash = self.get_file_hash(filepath)
-                    # key on size too, so a hash collision across different
-                    # sizes can't merge unrelated files into one group
-                    hash_groups[(size, file_hash)].append(filepath)
                 except OSError:
                     continue
+
+                # key on size too, so a hash collision across different sizes
+                # can't merge unrelated files into one group
+                key = (size, file_hash)
+                hash_groups[key].append(filepath)
+                if duplicate_callback and len(hash_groups[key]) >= 2:
+                    duplicate_callback(key, list(hash_groups[key]))
         return hash_groups
 
     def get_file_hash(self, filepath, algorithm="md5"):
