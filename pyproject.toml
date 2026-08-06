@@ -1,9 +1,9 @@
 [project]
 name = "find-duplicate-images"
-version = "1.0.0"
+version = "1.1.0"
 description = ""
 authors = [
-    {name = "Alex",email = "itsalexwu@gmail.com"}
+    {name = "Alex"}
 ]
 readme = "README.md"
 requires-python = ">=3.14, <3.16"

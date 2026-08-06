@@ -5,14 +5,14 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
       - run: pip install poetry
       - run: poetry install
-      - run: poetry run pyinstaller --onefile --windowed src/find_duplicate_images/main.py
-      - uses: actions/upload-artifact@v4
+      - run: poetry run pyinstaller --onefile --windowed --name "DuplicateImageFinder" src/find_duplicate_images/main.py
+      - uses: actions/upload-artifact@v7
         with:
           name: windows-exe
           path: dist/*.exe
